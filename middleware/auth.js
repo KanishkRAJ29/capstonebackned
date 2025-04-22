@@ -17,6 +17,7 @@ const authenticateJWT = (req, res, next) => {
     req.user = decoded
     next()
   } catch (error) {
+    console.error("JWT Verification Error:", error)
     res.status(401).json({ message: "Token is not valid" })
   }
 }

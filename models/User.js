@@ -81,6 +81,14 @@ UserSchema.pre("save", async function (next) {
   }
 })
 
+// Ensure merchantId is set before saving
+UserSchema.pre("save", function (next) {
+  if (!this.merchantId) {
+    this.merchantId = uuidv4()
+  }
+  next()
+})
+
 // Method to compare password
 UserSchema.methods.comparePassword = async function (candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password)
