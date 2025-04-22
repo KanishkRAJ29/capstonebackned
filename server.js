@@ -7,7 +7,7 @@ const dotenv = require("dotenv")
 const path = require("path")
 
 // Load environment variables
-dotenv.config({ path: "./config/config.env" });
+dotenv.config({ path: "./config/config.env" })
 
 // Import routes
 const authRoutes = require("./routes/auth")
@@ -34,12 +34,17 @@ const io = socketIo(server, {
 })
 
 // Middleware
-app.use(
-  cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
-    credentials: true,
-  }),
-)
+const corsOptions = {
+  origin: process.env.FRONTEND_URL || "http://localhost:3000",
+  methods: ["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+}
+// Globally enable CORS
+app.use(cors(corsOptions))
+// Explicitly handle preflight for all /api routes
+app.options("/api/*", cors(corsOptions))
+
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 
