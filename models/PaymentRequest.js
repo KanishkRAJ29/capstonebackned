@@ -1,249 +1,40 @@
-const express = require("express")
-const router = express.Router()
-const User = require("../models/User")
-const Transaction = require("../models/Transaction")
-const PaymentRequest = require("../models/PaymentRequest")
-const { authenticateJWT } = require("../middleware/auth")
-const qrcode = require("qrcode")
+const mongoose = require("mongoose")
+const { v4: uuidv4 } = require("uuid")
 
-// Create payment request (generate QR code)
-router.post("/request", authenticateJWT, async (req, res) => {
-  try {
-    const { amount } = req.body
+const PaymentRequestSchema = new mongoose.Schema(
+  {
+    requestId: {
+      type: String,
+      unique: true,
+      default: () => uuidv4(),
+    },
+    merchantId: {
+      type: String,
+      required: true,
+    },
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    amount: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    status: {
+      type: String,
+      enum: ["pending", "completed", "expired", "cancelled"],
+      default: "pending",
+    },
+    expiresAt: {
+      type: Date,
+      default: () => new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from now
+    },
+  },
+  {
+    timestamps: true,
+  },
+)
 
-    // Validate amount
-    if (!amount || amount <= 0) {
-      return res.status(400).json({ message: "Amount must be greater than 0" })
-    }
-
-    const user = await User.findById(req.user.userId)
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" })
-    }
-
-    // Create payment request
-    const paymentRequest = new PaymentRequest({
-      merchantId: user.merchantId,
-      userId: user._id,
-      amount,
-    })
-
-    await paymentRequest.save()
-
-    // Create QR code data
-    const qrData = JSON.stringify({
-      merchantId: user.merchantId,
-      amount,
-      requestId: paymentRequest.requestId,
-    })
-
-    // Generate payment link
-    const paymentLink = `${process.env.FRONTEND_URL}/pay/${paymentRequest.requestId}`
-
-    res.json({
-      message: "Payment request created successfully",
-      requestId: paymentRequest.requestId,
-      qrData,
-      paymentLink,
-    })
-  } catch (error) {
-    console.error("Create payment request error:", error)
-    res.status(500).json({ message: "Server error" })
-  }
-})
-
-// Get payment request details
-router.get("/request/:requestId", async (req, res) => {
-  try {
-    const { requestId } = req.params
-
-    const paymentRequest = await PaymentRequest.findOne({ requestId })
-
-    if (!paymentRequest) {
-      return res.status(404).json({ message: "Payment request not found" })
-    }
-
-    // Check if payment request is expired
-    if (paymentRequest.status === "expired" || new Date() > paymentRequest.expiresAt) {
-      paymentRequest.status = "expired"
-      await paymentRequest.save()
-      return res.status(400).json({ message: "Payment request has expired" })
-    }
-
-    // Get merchant details
-    const merchant = await User.findOne({ merchantId: paymentRequest.merchantId })
-
-    if (!merchant) {
-      return res.status(404).json({ message: "Merchant not found" })
-    }
-
-    res.json({
-      requestId: paymentRequest.requestId,
-      merchantId: paymentRequest.merchantId,
-      merchantName: merchant.username,
-      amount: paymentRequest.amount,
-      status: paymentRequest.status,
-      createdAt: paymentRequest.createdAt,
-      expiresAt: paymentRequest.expiresAt,
-    })
-  } catch (error) {
-    console.error("Get payment request error:", error)
-    res.status(500).json({ message: "Server error" })
-  }
-})
-
-// Send payment (from watch)
-router.post("/send", async (req, res) => {
-  try {
-    const { senderId, receiverId, amount, requestId, fingerprintVerified } = req.body
-
-    // Validate input
-    if (!senderId || !receiverId || !amount || amount <= 0) {
-      return res.status(400).json({ message: "Invalid payment details" })
-    }
-
-    // Validate fingerprint verification
-    if (!fingerprintVerified) {
-      return res.status(401).json({ message: "Fingerprint verification required" })
-    }
-
-    // Find sender and receiver
-    const sender = await User.findOne({ merchantId: senderId })
-    const receiver = await User.findOne({ merchantId: receiverId })
-
-    if (!sender || !receiver) {
-      return res.status(404).json({ message: "Sender or receiver not found" })
-    }
-
-    // Check if sender has sufficient balance
-    if (sender.balance < amount) {
-      return res.status(400).json({ message: "Insufficient balance" })
-    }
-
-    // If requestId is provided, validate it
-    if (requestId) {
-      const paymentRequest = await PaymentRequest.findOne({ requestId })
-
-      if (!paymentRequest) {
-        return res.status(404).json({ message: "Payment request not found" })
-      }
-
-      if (paymentRequest.status !== "pending") {
-        return res.status(400).json({ message: "Payment request is not pending" })
-      }
-
-      if (paymentRequest.merchantId !== receiverId) {
-        return res.status(400).json({ message: "Invalid receiver for this payment request" })
-      }
-
-      if (paymentRequest.amount !== amount) {
-        return res.status(400).json({ message: "Amount does not match payment request" })
-      }
-
-      // Update payment request status
-      paymentRequest.status = "completed"
-      await paymentRequest.save()
-    }
-
-    // Update balances
-    sender.balance -= amount
-    receiver.balance += amount
-
-    await sender.save()
-    await receiver.save()
-
-    // Create transaction records
-    const senderTransaction = new Transaction({
-      userId: sender._id,
-      type: "sent",
-      amount,
-      description: `Payment to ${receiver.username}`,
-      otherParty: receiver.username,
-    })
-
-    const receiverTransaction = new Transaction({
-      userId: receiver._id,
-      type: "received",
-      amount,
-      description: `Payment from ${sender.username}`,
-      otherParty: sender.username,
-      relatedTransaction: senderTransaction._id,
-    })
-
-    senderTransaction.relatedTransaction = receiverTransaction._id
-
-    await senderTransaction.save()
-    await receiverTransaction.save()
-
-    // Emit socket events
-    const io = req.io
-    io.to(sender._id.toString()).emit("payment:completed", {
-      type: "sent",
-      amount,
-      otherParty: receiver.username,
-      balance: sender.balance,
-    })
-
-    io.to(receiver._id.toString()).emit("payment:completed", {
-      type: "received",
-      amount,
-      otherParty: sender.username,
-      balance: receiver.balance,
-    })
-
-    res.json({
-      message: "Payment sent successfully",
-      transactionId: senderTransaction._id,
-    })
-  } catch (error) {
-    console.error("Send payment error:", error)
-    res.status(500).json({ message: "Server error" })
-  }
-})
-
-// Check payment status (for watch polling)
-router.get("/status/:transactionId", async (req, res) => {
-  try {
-    const { transactionId } = req.params
-
-    const transaction = await Transaction.findById(transactionId)
-
-    if (!transaction) {
-      return res.status(404).json({ message: "Transaction not found" })
-    }
-
-    res.json({
-      status: transaction.status,
-      type: transaction.type,
-      amount: transaction.amount,
-      description: transaction.description,
-    })
-  } catch (error) {
-    console.error("Check payment status error:", error)
-    res.status(500).json({ message: "Server error" })
-  }
-})
-
-// Get merchant details by merchantId
-router.get("/merchant/:merchantId", async (req, res) => {
-  try {
-    const { merchantId } = req.params
-
-    const merchant = await User.findOne({ merchantId })
-
-    if (!merchant) {
-      return res.status(404).json({ message: "Merchant not found" })
-    }
-
-    res.json({
-      merchantId: merchant.merchantId,
-      merchantName: merchant.username,
-    })
-  } catch (error) {
-    console.error("Get merchant details error:", error)
-    res.status(500).json({ message: "Server error" })
-  }
-})
-
-module.exports = router
+module.exports = mongoose.model("PaymentRequest", PaymentRequestSchema)

@@ -93,6 +93,34 @@ router.get("/request/:requestId", async (req, res) => {
   }
 })
 
+// Check payment request status
+router.get("/request/status/:requestId", authenticateJWT, async (req, res) => {
+  try {
+    const { requestId } = req.params
+
+    const paymentRequest = await PaymentRequest.findOne({ requestId })
+
+    if (!paymentRequest) {
+      return res.status(404).json({ message: "Payment request not found" })
+    }
+
+    // Check if the user is authorized to check this request
+    if (paymentRequest.userId.toString() !== req.user.userId) {
+      return res.status(403).json({ message: "Not authorized to check this payment request" })
+    }
+
+    res.json({
+      status: paymentRequest.status,
+      amount: paymentRequest.amount,
+      createdAt: paymentRequest.createdAt,
+      expiresAt: paymentRequest.expiresAt,
+    })
+  } catch (error) {
+    console.error("Check payment request status error:", error)
+    res.status(500).json({ message: "Server error" })
+  }
+})
+
 // Send payment (from watch)
 router.post("/send", async (req, res) => {
   try {
@@ -221,6 +249,27 @@ router.get("/status/:transactionId", async (req, res) => {
     })
   } catch (error) {
     console.error("Check payment status error:", error)
+    res.status(500).json({ message: "Server error" })
+  }
+})
+
+// Get merchant details by merchantId
+router.get("/merchant/:merchantId", async (req, res) => {
+  try {
+    const { merchantId } = req.params
+
+    const merchant = await User.findOne({ merchantId })
+
+    if (!merchant) {
+      return res.status(404).json({ message: "Merchant not found" })
+    }
+
+    res.json({
+      merchantId: merchant.merchantId,
+      merchantName: merchant.username,
+    })
+  } catch (error) {
+    console.error("Get merchant details error:", error)
     res.status(500).json({ message: "Server error" })
   }
 })
