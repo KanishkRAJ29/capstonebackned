@@ -6,6 +6,198 @@ const PaymentRequest = require("../models/PaymentRequest")
 const { authenticateJWT } = require("../middleware/auth")
 const qrcode = require("qrcode")
 
+/*
+// POST /api/payments/fingerprint-transfer
+async function performTransfer(sender, receiver, amount) {
+  if (sender.balance < amount) {
+    return { success: false, message: "Insufficient balance" };
+  }
+
+  // update balances
+  sender.balance   -= amount;
+  receiver.balance += amount;
+  await sender.save();
+  await receiver.save();
+
+  // log transactions
+  const sentTx = await Transaction.create({
+    userId: sender._id,
+    type: "sent",
+    amount,
+    description: `Payment to ${receiver.username}`,
+    otherParty: receiver.username
+  });
+
+  await Transaction.create({
+    userId: receiver._id,
+    type: "received",
+    amount,
+    description: `Payment from ${sender.username}`,
+    otherParty: sender.username,
+    relatedTransaction: sentTx._id
+  });
+
+  return {
+    success: true,
+    newBalance: sender.balance,
+    receiverBalance: receiver.balance
+  };
+}
+
+router.post(
+  "/fingerprint-transfer",
+  authenticateJWT,
+  async (req, res) => {
+    try {
+      const { senderId, receiverId, amount, requestId } = req.body;
+
+      // senderId must match authenticated user
+      if (req.user.merchantId !== senderId) {
+        return res.status(403).json({ message: "Sender mismatch" });
+      }
+
+      // find sender & receiver by merchantId
+      const sender   = await User.findOne({ merchantId: senderId });
+      const receiver = await User.findOne({ merchantId: receiverId });
+      if (!sender || !receiver) {
+        return res.status(404).json({ message: "Sender or receiver not found" });
+      }
+
+      // if this was a QR-generated request, validate it
+      if (requestId) {
+        const payReq = await PaymentRequest.findOne({ requestId });
+        if (!payReq) {
+          return res.status(404).json({ message: "Payment request not found" });
+        }
+        if (payReq.status !== "pending") {
+          return res.status(400).json({ message: `Request already ${payReq.status}` });
+        }
+        if (payReq.merchantId !== receiverId || payReq.amount !== amount) {
+          return res.status(400).json({ message: "Request data mismatch" });
+        }
+        payReq.status = "completed";
+        await payReq.save();
+      }
+
+      // perform the money transfer
+      const result = await performTransfer(sender, receiver, amount);
+      if (!result.success) {
+        return res.status(400).json({ message: result.message });
+      }
+
+      return res.json({
+        message: "Transaction successful",
+        newBalance: result.newBalance,
+        receiverBalance: result.receiverBalance
+      });
+
+    } catch (err) {
+      console.error("fingerprint-transfer error:", err);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);*/
+
+
+
+// Shared transfer logic
+async function performTransfer(sender, receiver, amount) {
+  if (sender.balance < amount) {
+    return { success: false, message: "Insufficient balance" };
+  }
+  sender.balance   -= amount;
+  receiver.balance += amount;
+  await sender.save();
+  await receiver.save();
+
+  const sentTx = await Transaction.create({
+    userId: sender._id,
+    type: "sent",
+    amount,
+    description: `Payment to ${receiver.username}`,
+    otherParty: receiver.username
+  });
+
+  await Transaction.create({
+    userId: receiver._id,
+    type: "received",
+    amount,
+    description: `Payment from ${sender.username}`,
+    otherParty: sender.username,
+    relatedTransaction: sentTx._id
+  });
+
+  return {
+    success: true,
+    newBalance: sender.balance,
+    receiverBalance: receiver.balance
+  };
+}
+
+// POST /api/payments/fingerprint-transfer
+router.post(
+  "/fingerprint-transfer",
+  authenticateJWT,
+  async (req, res) => {
+    try {
+      const { senderId, receiverId, amount, requestId } = req.body;
+
+      // 1) Load the authenticated user from Mongo
+      const authUser = await User.findById(req.user.userId);
+      if (!authUser) {
+        return res.status(404).json({ message: "Authenticated user not found" });
+      }
+
+      // 2) Ensure the body’s senderId matches that user’s merchantId
+      if (authUser.merchantId !== senderId) {
+        return res.status(403).json({ message: "Sender mismatch" });
+      }
+
+      // 3) Load sender & receiver by merchantId
+      const sender   = authUser;
+      const receiver = await User.findOne({ merchantId: receiverId });
+      if (!receiver) {
+        return res.status(404).json({ message: "Receiver not found" });
+      }
+
+      // 4) If using a payment request, validate it
+      if (requestId) {
+        const payReq = await PaymentRequest.findOne({ requestId });
+        if (!payReq) {
+          return res.status(404).json({ message: "Payment request not found" });
+        }
+        if (payReq.status !== "pending") {
+          return res.status(400).json({ message: `Request already ${payReq.status}` });
+        }
+        if (payReq.merchantId !== receiverId || payReq.amount !== amount) {
+          return res.status(400).json({ message: "Request data mismatch" });
+        }
+        payReq.status = "completed";
+        await payReq.save();
+      }
+
+      // 5) Perform the transfer
+      const result = await performTransfer(sender, receiver, amount);
+      if (!result.success) {
+        return res.status(400).json({ message: result.message });
+      }
+
+      // 6) Return success
+      return res.json({
+        message: "Transaction successful",
+        newBalance: result.newBalance,
+        receiverBalance: result.receiverBalance
+      });
+
+    } catch (err) {
+      console.error("fingerprint-transfer error:", err);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
+
+
 // Create payment request (generate QR code)
 router.post("/request", authenticateJWT, async (req, res) => {
   try {
@@ -229,7 +421,7 @@ router.post("/send", async (req, res) => {
     res.status(500).json({ message: "Server error" })
   }
 })
-
+/*
 // Check payment status (for watch polling)
 router.get("/status/:transactionId", async (req, res) => {
   try {
@@ -251,8 +443,8 @@ router.get("/status/:transactionId", async (req, res) => {
     console.error("Check payment status error:", error)
     res.status(500).json({ message: "Server error" })
   }
-})
-
+})*/
+/*
 // Get merchant details by merchantId
 router.get("/merchant/:merchantId", async (req, res) => {
   try {
@@ -273,5 +465,5 @@ router.get("/merchant/:merchantId", async (req, res) => {
     res.status(500).json({ message: "Server error" })
   }
 })
-
+*/
 module.exports = router
