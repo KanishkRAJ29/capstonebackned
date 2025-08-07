@@ -137,30 +137,23 @@ async function performTransfer(sender, receiver, amount) {
 // POST /api/payments/fingerprint-transfer
 router.post(
   "/fingerprint-transfer",
-  authenticateJWT,
   async (req, res) => {
     try {
       const { senderId, receiverId, amount, requestId } = req.body;
 
-      // 1) Load the authenticated user from Mongo
-      const authUser = await User.findById(req.user.userId);
-      if (!authUser) {
-        return res.status(404).json({ message: "Authenticated user not found" });
+      // 1) Load the sender by merchantId directly
+      const sender = await User.findOne({ merchantId: senderId });
+      if (!sender) {
+        return res.status(404).json({ message: "Sender not found" });
       }
 
-      // 2) Ensure the body’s senderId matches that user’s merchantId
-      if (authUser.merchantId !== senderId) {
-        return res.status(403).json({ message: "Sender mismatch" });
-      }
-
-      // 3) Load sender & receiver by merchantId
-      const sender   = authUser;
+      // 2) Load the receiver
       const receiver = await User.findOne({ merchantId: receiverId });
       if (!receiver) {
         return res.status(404).json({ message: "Receiver not found" });
       }
 
-      // 4) If using a payment request, validate it
+      // 3) (Optional) validate paymentRequest if you have one
       if (requestId) {
         const payReq = await PaymentRequest.findOne({ requestId });
         if (!payReq) {
@@ -176,13 +169,13 @@ router.post(
         await payReq.save();
       }
 
-      // 5) Perform the transfer
+      // 4) Perform the transfer
       const result = await performTransfer(sender, receiver, amount);
       if (!result.success) {
         return res.status(400).json({ message: result.message });
       }
 
-      // 6) Return success
+      // 5) Return success
       return res.json({
         message: "Transaction successful",
         newBalance: result.newBalance,
@@ -195,6 +188,7 @@ router.post(
     }
   }
 );
+
 
 
 

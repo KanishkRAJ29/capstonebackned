@@ -1,116 +1,74 @@
-const mongoose = require("mongoose")
-const bcrypt = require("bcryptjs")
-const { v4: uuidv4 } = require("uuid")
+// models/User.js
+const mongoose = require("mongoose");
+const bcrypt   = require("bcryptjs");
+const Counter  = require("./counter.js");
 
-const UserSchema = new mongoose.Schema(
-  {
-    username: {
-      type: String,
-      required: true,
-      trim: true,
-      unique: true,
-    },
-    email: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-      lowercase: true,
-    },
-    password: {
-      type: String,
-      required: true,
-    },
-    merchantId: {
-      type: String,
-      unique: true,
-      default: () => uuidv4(),
-    },
-    balance: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-    pin: {
-      type: String,
-      default: null,
-    },
-    hasPinSetup: {
-      type: Boolean,
-      default: false,
-    },
-    role: {
-      type: String,
-      enum: ["user", "admin"],
-      default: "user",
-    },
-    createdAt: {
-      type: Date,
-      default: Date.now,
-    },
-  },
-  {
-    timestamps: true,
-  },
-)
+const UserSchema = new mongoose.Schema({
+  username: { type:String, required:true, unique:true, trim:true },
+  email:    { type:String, required:true, unique:true, lowercase:true, trim:true },
+  password: { type:String, required:true },
+  merchantId:{ type:String, unique:true },    // now numeric-as-string
+  balance:  { type:Number, default:0, min:0 },
+  pin:      { type:String, default:null },
+  hasPinSetup:{ type:Boolean, default:false },
+  role:     { type:String, enum:["user","admin"], default:"user" }
+},{
+  timestamps:true
+});
 
-// Hash password before saving
-UserSchema.pre("save", async function (next) {
-  if (!this.isModified("password")) return next()
-
-  try {
-    const salt = await bcrypt.genSalt(10)
-    this.password = await bcrypt.hash(this.password, salt)
-    next()
-  } catch (error) {
-    next(error)
+// 1) Auto‑increment merchantId on first save
+UserSchema.pre("save", async function(next) {
+  if (this.isNew) {
+    const c = await Counter.findByIdAndUpdate(
+      { _id: "userId" },
+      { $inc: { seq: 1 }},
+      { new: true, upsert: true }
+    );
+    this.merchantId = c.seq.toString();
   }
-})
+  next();
+});
 
-// Hash PIN before saving
-UserSchema.pre("save", async function (next) {
-  if (!this.isModified("pin") || !this.pin) return next()
-
-  try {
-    const salt = await bcrypt.genSalt(10)
-    this.pin = await bcrypt.hash(this.pin, salt)
-    this.hasPinSetup = true
-    next()
-  } catch (error) {
-    next(error)
+// 2) Hash password
+UserSchema.pre("save", async function(next) {
+  if (this.isModified("password")) {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
   }
-})
+  next();
+});
 
-// Ensure merchantId is set before saving
-UserSchema.pre("save", function (next) {
-  if (!this.merchantId) {
-    this.merchantId = uuidv4()
+// 3) Hash PIN
+UserSchema.pre("save", async function(next) {
+  if (this.isModified("pin") && this.pin) {
+    const salt = await bcrypt.genSalt(10);
+    this.pin = await bcrypt.hash(this.pin, salt);
+    this.hasPinSetup = true;
   }
-  next()
-})
+  next();
+});
 
-// Method to compare password
-UserSchema.methods.comparePassword = async function (candidatePassword) {
-  return await bcrypt.compare(candidatePassword, this.password)
-}
+// Password compare
+UserSchema.methods.comparePassword = function(cand) {
+  return bcrypt.compare(cand, this.password);
+};
 
-// Method to compare PIN
-UserSchema.methods.comparePin = async function (candidatePin) {
-  if (!this.pin) return false
-  return await bcrypt.compare(candidatePin, this.pin)
-}
+// PIN compare
+UserSchema.methods.comparePin = function(cand) {
+  if (!this.pin) return Promise.resolve(false);
+  return bcrypt.compare(cand, this.pin);
+};
 
-// Method to get user profile (without sensitive data)
-UserSchema.methods.getProfile = function () {
+UserSchema.methods.getProfile = function() {
   return {
-    _id: this._id,
-    username: this.username,
-    email: this.email,
-    merchantId: this.merchantId,
-    balance: this.balance,
+    _id:         this._id,
+    username:    this.username,
+    email:       this.email,
+    merchantId:  this.merchantId,
+    balance:     this.balance,
     hasPinSetup: this.hasPinSetup,
-    role: this.role,
-  }
-}
+    role:        this.role
+  };
+};
 
-module.exports = mongoose.model("User", UserSchema)
+module.exports = mongoose.model("User", UserSchema);
