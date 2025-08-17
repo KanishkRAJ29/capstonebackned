@@ -74,6 +74,7 @@ app.get("/api/health", (req, res) => {
 })
 
 // Catch-all route for API 404s
+
 app.use("/api/*", (req, res) => {
   console.log(`404 Not Found: ${req.method} ${req.originalUrl}`)
   res.status(404).json({
